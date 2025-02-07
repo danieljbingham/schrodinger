@@ -1,1 +1,2 @@
-# cats-circuit-breaker
+# schrodinger
+A circuit breaker implementation using Cats
