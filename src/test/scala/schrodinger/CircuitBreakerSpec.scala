@@ -1,8 +1,10 @@
 package schrodinger
 
 import cats.effect.IO
+import cats.implicits.*
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration.*
+import org.scalatest.compatible.Assertion
 
 final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
 
@@ -14,7 +16,7 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
   "CircuitBreaker" should {
     "execute function in closed state within maxFailures" in {
       for {
-        cb <- CircuitBreaker[IO](maxFailures = 1, resetTimeout = 1.second)
+        cb <- CircuitBreakerBasic[IO](maxFailures = 1, resetTimeout = 1.second)
         result <- cb.protect(success)
       } yield result.value shouldBe successMessage
 
@@ -22,7 +24,7 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
 
     "transition to open state on maxFailures" in {
       for {
-        cb <- CircuitBreaker[IO](maxFailures = 1, resetTimeout = 1.second)
+        cb <- CircuitBreakerBasic[IO](maxFailures = 1, resetTimeout = 1.second)
         closedResult <- cb.protect(IO.raiseError(failure))
         openResult <- cb.protect(IO.raiseError(failure))
       } yield {
@@ -35,7 +37,7 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
     // TODO: test by simulating cats clock
     "remain in open state when below resetTimeout" in {
       for {
-        cb <- CircuitBreaker[IO](maxFailures = 1, resetTimeout = 10.seconds)
+        cb <- CircuitBreakerBasic[IO](maxFailures = 1, resetTimeout = 10.seconds)
         closedResult <- cb.protect(IO.raiseError(failure))
         openResult <- cb.protect(IO.raiseError(failure))
         openResult1 <- cb.protect(IO(1))
@@ -50,7 +52,7 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
     // TODO: test by simulating cats clock instead of sleeping
     "reset open state when resetTimeout has elapsed and function fails" in {
       for {
-        cb <- CircuitBreaker[IO](maxFailures = 1, resetTimeout = 1.seconds)
+        cb <- CircuitBreakerBasic[IO](maxFailures = 1, resetTimeout = 1.seconds)
         closedResult <- cb.protect(IO.raiseError(failure))
         openResult <- cb.protect(IO.raiseError(failure))
         _ <- IO.sleep(2.seconds)
@@ -67,7 +69,7 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
     // TODO: test by simulating cats clock instead of sleeping
     "transition to closed state when resetTimeout has elapsed and function succeeds" in {
       for {
-        cb <- CircuitBreaker[IO](maxFailures = 1, resetTimeout = 1.seconds)
+        cb <- CircuitBreakerBasic[IO](maxFailures = 1, resetTimeout = 1.seconds)
         closedResult <- cb.protect(IO.raiseError(failure))
         openResult <- cb.protect(IO.raiseError(failure))
         _ <- IO.sleep(2.seconds)
@@ -78,6 +80,23 @@ final class CircuitBreakerSpec extends AsyncWordIOSpecBase {
         openResult.left.value shouldBe CircuitBreakerOpenException
         closedResult1.value shouldBe successMessage
       }
+    }
+
+    // TODO: refactor tests so I'm testing all cases for all implementations of CircuitBreaker
+    "should atomically update state with atomiccell" in {
+      for {
+        cb <- CircuitBreakerAtomicCell[IO](maxFailures = 501, resetTimeout = 1.seconds)
+        _ <- List.fill(500)(cb.protect(IO.raiseError(failure))).parSequence
+        state <- cb.getState
+      } yield state shouldBe State.Closed(500)
+    }
+
+    "should atomically update state with mutex" in {
+      for {
+        cb <- CircuitBreakerBasic[IO](maxFailures = 501, resetTimeout = 1.seconds)
+        _ <- List.fill(500)(cb.protect(IO.raiseError(failure))).parSequence
+        state <- cb.getState
+      } yield state shouldBe State.Closed(500)
     }
   }
 }

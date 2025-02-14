@@ -21,39 +21,11 @@ trait CircuitBreaker[F[_]] {
     *   the result of the function f
     */
   def protect[A](f: => F[A]): F[Either[Throwable, A]]
+
+  def getState: F[State]
 }
 
 object CircuitBreaker {
-
-  def apply[F[_]: Concurrent: Clock](maxFailures: Int, resetTimeout: FiniteDuration) =
-    for {
-      ref <- Ref[F].of(Closed(0))
-      clock = Clock[F]
-    } yield new CircuitBreaker[F] {
-      def protect[A](f: => F[A]): F[Either[Throwable, A]] = ref.get.flatMap {
-        case Closed(failures) =>
-          f.attempt.flatTap {
-            case Left(_) if failures + 1 >= maxFailures => clock.realTime.flatMap(time => ref.set(Open(time.toMillis)))
-            case Left(_)                                => ref.set(Closed(failures + 1))
-            case Right(_)                               => ().pure
-          }
-        case Open(startTime) =>
-          isElapsed(startTime, resetTimeout, clock).flatMap {
-            case true =>
-              ref.set(HalfOpen) *> f.attempt.flatTap {
-                case Right(value) => ref.set(Closed(0))
-                case Left(value)  => ref.set(Open(System.currentTimeMillis()))
-              }
-            case false => Left(CircuitBreakerOpenException).pure
-          }
-        /*
-         * TODO: implement half-open state to define when to move back to closed based on proportion of successes or something,
-         * currently bypassed by Open state
-         */
-        case HalfOpen => Left(CircuitBreakerOpenException).pure
-      }
-    }
-
-  private def isElapsed[F[_]: Concurrent](startTime: Long, resetTimeout: FiniteDuration, clock: Clock[F]): F[Boolean] =
+  def isElapsed[F[_]: Concurrent](startTime: Long, resetTimeout: FiniteDuration, clock: Clock[F]): F[Boolean] =
     clock.realTime.map(time => (time.toMillis - startTime) >= resetTimeout.toMillis)
 }
